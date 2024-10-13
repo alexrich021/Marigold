@@ -147,7 +147,7 @@ class MarigoldPipeline(DiffusionPipeline):
     @torch.no_grad()
     def __call__(
         self,
-        input_image: Union[Image.Image, torch.Tensor],
+        input_image: Union[Image.Image, torch.Tensor, list],
         denoising_steps: Optional[int] = None,
         ensemble_size: int = 5,
         processing_res: Optional[int] = None,
@@ -158,7 +158,7 @@ class MarigoldPipeline(DiffusionPipeline):
         color_map: str = "Spectral",
         show_progress_bar: bool = True,
         ensemble_kwargs: Dict = None,
-    ) -> MarigoldDepthOutput:
+    ) -> list[MarigoldDepthOutput]:
         """
         Function invoked when calling the pipeline.
 
@@ -223,6 +223,8 @@ class MarigoldPipeline(DiffusionPipeline):
             # convert to torch tensor [H, W, rgb] -> [rgb, H, W]
             rgb = pil_to_tensor(input_image)
             rgb = rgb.unsqueeze(0)  # [1, rgb, H, W]
+        elif isinstance(input_image, list):
+            rgb = torch.stack([pil_to_tensor(img.convert("RGB")) for img in input_image], dim=0)    # [B, rgb, H, W]
         elif isinstance(input_image, torch.Tensor):
             rgb = input_image
         else:
@@ -247,7 +249,7 @@ class MarigoldPipeline(DiffusionPipeline):
 
         # ----------------- Predicting depth -----------------
         # Batch repeated input image
-        duplicated_rgb = rgb_norm.expand(ensemble_size, -1, -1, -1)
+        duplicated_rgb = rgb_norm.repeat_interleave(ensemble_size, dim=0)
         single_rgb_dataset = TensorDataset(duplicated_rgb)
         if batch_size > 0:
             _bs = batch_size
@@ -284,51 +286,60 @@ class MarigoldPipeline(DiffusionPipeline):
 
         # ----------------- Test-time ensembling -----------------
         if ensemble_size > 1:
-            depth_pred, pred_uncert = ensemble_depth(
-                depth_preds,
-                scale_invariant=self.scale_invariant,
-                shift_invariant=self.shift_invariant,
-                max_res=50,
-                **(ensemble_kwargs or {}),
-            )
+            depth_pred_list = []
+            pred_uncert_list = []
+            for e in range(ensemble_size):
+                depth_preds_subset = depth_preds[e * ensemble_size: (e+1) * ensemble_size]
+                depth_pred, pred_uncert = ensemble_depth(
+                    depth_preds_subset,
+                    scale_invariant=self.scale_invariant,
+                    shift_invariant=self.shift_invariant,
+                    max_res=50,
+                    **(ensemble_kwargs or {}),
+                )
+                depth_pred_list.append(depth_pred)
+                pred_uncert_list.append(pred_uncert)
         else:
-            depth_pred = depth_preds
-            pred_uncert = None
+            depth_pred_list = torch.unbind(depth_preds, dim=0)
+            pred_uncert_list = [None for _ in range(len(depth_pred_list))]
 
-        # Resize back to original resolution
-        if match_input_res:
-            depth_pred = resize(
-                depth_pred,
-                input_size[-2:],
-                interpolation=resample_method,
-                antialias=True,
-            )
+        outputs = []
+        for depth_pred, pred_uncert in zip(depth_pred_list, pred_uncert_list):
+            # Resize back to original resolution
+            if match_input_res:
+                depth_pred = resize(
+                    depth_pred,
+                    input_size[-2:],
+                    interpolation=resample_method,
+                    antialias=True,
+                )
 
-        # Convert to numpy
-        depth_pred = depth_pred.squeeze()
-        depth_pred = depth_pred.cpu().numpy()
-        if pred_uncert is not None:
-            pred_uncert = pred_uncert.squeeze().cpu().numpy()
+            # Convert to numpy
+            depth_pred = depth_pred.squeeze()
+            depth_pred = depth_pred.cpu().numpy()
+            if pred_uncert is not None:
+                pred_uncert = pred_uncert.squeeze().cpu().numpy()
 
-        # Clip output range
-        depth_pred = depth_pred.clip(0, 1)
+            # Clip output range
+            depth_pred = depth_pred.clip(0, 1)
 
-        # Colorize
-        if color_map is not None:
-            depth_colored = colorize_depth_maps(
-                depth_pred, 0, 1, cmap=color_map
-            ).squeeze()  # [3, H, W], value in (0, 1)
-            depth_colored = (depth_colored * 255).astype(np.uint8)
-            depth_colored_hwc = chw2hwc(depth_colored)
-            depth_colored_img = Image.fromarray(depth_colored_hwc)
-        else:
-            depth_colored_img = None
+            # Colorize
+            if color_map is not None:
+                depth_colored = colorize_depth_maps(
+                    depth_pred, 0, 1, cmap=color_map
+                ).squeeze()  # [3, H, W], value in (0, 1)
+                depth_colored = (depth_colored * 255).astype(np.uint8)
+                depth_colored_hwc = chw2hwc(depth_colored)
+                depth_colored_img = Image.fromarray(depth_colored_hwc)
+            else:
+                depth_colored_img = None
 
-        return MarigoldDepthOutput(
-            depth_np=depth_pred,
-            depth_colored=depth_colored_img,
-            uncertainty=pred_uncert,
-        )
+            outputs.append(MarigoldDepthOutput(
+                depth_np=depth_pred,
+                depth_colored=depth_colored_img,
+                uncertainty=pred_uncert,
+            ))
+        return outputs
 
     def _check_inference_step(self, n_step: int) -> None:
         """
