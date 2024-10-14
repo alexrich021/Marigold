@@ -30,9 +30,11 @@ from .kitti_dataset import KITTIDataset
 from .nyu_dataset import NYUDataset
 from .scannet_dataset import ScanNetDataset
 from .vkitti_dataset import VirtualKITTIDataset
+from .mvs_dataset import MVSDataset
 
 
 dataset_name_class_dict = {
+    "mvs": MVSDataset,
     "hypersim": HypersimDataset,
     "vkitti": VirtualKITTIDataset,
     "nyu_v2": NYUDataset,

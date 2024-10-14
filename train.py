@@ -89,12 +89,12 @@ if "__main__" == __name__:
         help="On Slurm cluster, do not copy data to local scratch",
     )
     parser.add_argument(
-        "--base_data_dir", type=str, default=None, help="directory of training data"
+        "--base_data_dir", type=str, default='/media/ssd0', help="directory of training data"
     )
     parser.add_argument(
         "--base_ckpt_dir",
         type=str,
-        default=None,
+        default='checkpoint',
         help="directory of pretrained checkpoint",
     )
     parser.add_argument(

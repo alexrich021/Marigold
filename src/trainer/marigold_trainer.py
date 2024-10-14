@@ -536,7 +536,7 @@ class MarigoldTrainer:
                 color_map=None,
                 show_progress_bar=False,
                 resample_method=self.cfg.validation.resample_method,
-            )
+            )[0]
 
             depth_pred: np.ndarray = pipe_out.depth_np
 

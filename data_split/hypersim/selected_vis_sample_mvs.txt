@@ -1,0 +1,3 @@
+ai_015_004_00/images/00000002.jpg ai_015_004_00/depth/00000002.pfm  (val)
+ai_044_003_01/images/00000063.jpg ai_044_003_01/depth/00000063.pfm  (val)
+ai_052_003_01/images/00000069.jpg ai_052_003_01/depth/00000069.pfm  (val)
