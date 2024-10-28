@@ -60,11 +60,14 @@ class MarigoldDepthOutput(BaseOutput):
             Colorized depth map, with the shape of [3, H, W] and values in [0, 1].
         uncertainty (`None` or `np.ndarray`):
             Uncalibrated uncertainty(MAD, median absolute deviation) coming from ensembling.
+        depth_latent (`None` or `np.ndarray`):
+            Latent encoding, after de-noising iterations but prior to VAE decoder
     """
 
     depth_np: np.ndarray
     depth_colored: Union[None, Image.Image]
     uncertainty: Union[None, np.ndarray]
+    depth_latent: Union[None, np.ndarray]
 
 
 class MarigoldPipeline(DiffusionPipeline):
@@ -266,6 +269,7 @@ class MarigoldPipeline(DiffusionPipeline):
 
         # Predict depth maps (batched)
         depth_pred_ls = []
+        depth_latent_ls = []
         if show_progress_bar:
             iterable = tqdm(
                 single_rgb_loader, desc=" " * 2 + "Inference batches", leave=False
@@ -274,14 +278,16 @@ class MarigoldPipeline(DiffusionPipeline):
             iterable = single_rgb_loader
         for batch in iterable:
             (batched_img,) = batch
-            depth_pred_raw = self.single_infer(
+            depth_pred_raw, depth_latent = self.single_infer(
                 rgb_in=batched_img,
                 num_inference_steps=denoising_steps,
                 show_pbar=show_progress_bar,
                 generator=generator,
             )
             depth_pred_ls.append(depth_pred_raw.detach())
+            depth_latent_ls.append(depth_latent.detach())
         depth_preds = torch.concat(depth_pred_ls, dim=0)
+        depth_latents = torch.concat(depth_latent_ls, dim=0)
         torch.cuda.empty_cache()  # clear vram cache for ensembling
 
         # ----------------- Test-time ensembling -----------------
@@ -299,12 +305,14 @@ class MarigoldPipeline(DiffusionPipeline):
                 )
                 depth_pred_list.append(depth_pred)
                 pred_uncert_list.append(pred_uncert)
+                depth_latent_list = [None for _ in range(len(depth_pred_list))]
         else:
             depth_pred_list = torch.unbind(depth_preds, dim=0)
             pred_uncert_list = [None for _ in range(len(depth_pred_list))]
+            depth_latent_list = torch.unbind(depth_latents, dim=0)
 
         outputs = []
-        for depth_pred, pred_uncert in zip(depth_pred_list, pred_uncert_list):
+        for depth_pred, pred_uncert, depth_latent in zip(depth_pred_list, pred_uncert_list, depth_latent_list):
             # Resize back to original resolution
             if match_input_res:
                 depth_pred = resize(
@@ -315,8 +323,9 @@ class MarigoldPipeline(DiffusionPipeline):
                 )
 
             # Convert to numpy
-            depth_pred = depth_pred.squeeze()
-            depth_pred = depth_pred.cpu().numpy()
+            depth_pred = depth_pred.squeeze().cpu().numpy()
+            if depth_latent is not None:
+                depth_latent = depth_latent.squeeze().cpu().numpy()
             if pred_uncert is not None:
                 pred_uncert = pred_uncert.squeeze().cpu().numpy()
 
@@ -338,6 +347,7 @@ class MarigoldPipeline(DiffusionPipeline):
                 depth_np=depth_pred,
                 depth_colored=depth_colored_img,
                 uncertainty=pred_uncert,
+                depth_latent=depth_latent
             ))
         return outputs
 
@@ -384,7 +394,7 @@ class MarigoldPipeline(DiffusionPipeline):
         num_inference_steps: int,
         generator: Union[torch.Generator, None],
         show_pbar: bool,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Perform an individual depth prediction without ensembling.
 
@@ -399,6 +409,7 @@ class MarigoldPipeline(DiffusionPipeline):
                 Random generator for initial noise generation.
         Returns:
             `torch.Tensor`: Predicted depth map.
+            `torch.Tensor`: Latent encoding after de-noising iterations but prior to VAE decoder
         """
         device = self.device
         rgb_in = rgb_in.to(device)
@@ -458,7 +469,7 @@ class MarigoldPipeline(DiffusionPipeline):
         # shift to [0, 1]
         depth = (depth + 1.0) / 2.0
 
-        return depth
+        return depth, depth_latent
 
     def encode_rgb(self, rgb_in: torch.Tensor) -> torch.Tensor:
         """

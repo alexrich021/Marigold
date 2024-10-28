@@ -55,6 +55,14 @@ if "__main__" == __name__:
     )
 
     parser.add_argument(
+        "--scene_list",
+        type=str,
+        default=None,
+        required=False,
+        help="List of sub-folders for depth prediction.",
+    )
+
+    parser.add_argument(
         "--output_dir", type=str, required=True, help="Output directory."
     )
 
@@ -125,9 +133,20 @@ if "__main__" == __name__:
         help="Flag of running on Apple Silicon.",
     )
 
+    parser.add_argument(
+        "--latent_only",
+        action='store_true',
+        help="Flag for storing only the latent encoding of the predicted depth map"
+    )
+
     args = parser.parse_args()
 
-    scenes = os.listdir(args.input_dir)
+    if args.scene_list is None:
+        scenes = os.listdir(args.input_dir)
+    else:
+        with open(args.scene_list, 'r') as f:
+            scenes = [l.rstrip() for l in f.readlines()][37:]
+
     for scene in tqdm(scenes, desc='Walking directory', leave=True):
         checkpoint_path = args.checkpoint
         input_rgb_dir = os.path.join(args.input_dir, scene, 'images')
@@ -265,15 +284,25 @@ if "__main__" == __name__:
                 for out_idx, pipe_out in enumerate(pipe_outs):
                     depth_pred: np.ndarray = pipe_out.depth_np
                     depth_colored: Image.Image = pipe_out.depth_colored
+                    depth_latent = pipe_out.depth_latent
 
                     # Save as npy
                     rgb_file = rgb_filename_list[batch_idx * img_batch_size + out_idx]
                     rgb_name_base = os.path.splitext(os.path.basename(rgb_file))[0]
                     pred_name_base = rgb_name_base #+ "_pred"
-                    npy_save_path = os.path.join(output_dir, f"{pred_name_base}.npy")
-                    if os.path.exists(npy_save_path):
-                        logging.warning(f"Existing file: '{npy_save_path}' will be overwritten")
-                    np.save(npy_save_path, depth_pred)
+                    if not args.latent_only:
+                        npy_save_path = os.path.join(output_dir, f"{pred_name_base}.npy")
+                        if os.path.exists(npy_save_path):
+                            logging.warning(f"Existing file: '{npy_save_path}' will be overwritten")
+                        np.save(npy_save_path, depth_pred)
+
+                    if depth_latent is not None:
+                        npy_save_path = os.path.join(output_dir, f"{pred_name_base}_latent.npy")
+                        if os.path.exists(npy_save_path):
+                            logging.warning(f"Existing file: '{npy_save_path}' will be overwritten")
+                        np.save(npy_save_path, depth_latent)
+                    elif args.latent_only:
+                        raise NotImplementedError('Latent generation not implemented for ensemble size > 1')
 
                     # # Save as 16-bit uint png
                     # depth_to_save = (depth_pred * 65535.0).astype(np.uint16)
