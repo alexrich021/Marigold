@@ -145,7 +145,7 @@ if "__main__" == __name__:
         scenes = os.listdir(args.input_dir)
     else:
         with open(args.scene_list, 'r') as f:
-            scenes = [l.rstrip() for l in f.readlines()][37:]
+            scenes = [l.rstrip() for l in f.readlines()]
 
     for scene in tqdm(scenes, desc='Walking directory', leave=True):
         checkpoint_path = args.checkpoint
